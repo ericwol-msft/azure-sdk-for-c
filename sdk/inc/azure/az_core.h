@@ -21,6 +21,7 @@
 #include <azure/core/az_http.h>
 #include <azure/core/az_http_transport.h>
 #include <azure/core/az_json.h>
+#include <azure/core/az_cbor.h>
 #include <azure/core/az_log.h>
 #include <azure/core/az_platform.h>
 #include <azure/core/az_precondition.h>

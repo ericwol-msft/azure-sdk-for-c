@@ -29,6 +29,7 @@ enum
   _az_FACILITY_IOT = 0x5,
   _az_FACILITY_IOT_MQTT = 0x6,
   _az_FACILITY_ULIB = 0x7,
+  _az_FACILITY_CORE_CBOR = 0x8,
 };
 
 enum
@@ -108,6 +109,16 @@ enum az_result_core
 
   /// No more JSON text left to process.
   AZ_ERROR_JSON_READER_DONE = _az_RESULT_MAKE_ERROR(_az_FACILITY_CORE_JSON, 3),
+
+  // === CBOR error codes ===
+  /// The kind of the token being read is not compatible with the expected type of the value.
+  AZ_ERROR_CBOR_INVALID_STATE = _az_RESULT_MAKE_ERROR(_az_FACILITY_CORE_CBOR, 1),
+
+  /// The CBOR depth is too large.
+  AZ_ERROR_CBOR_NESTING_OVERFLOW = _az_RESULT_MAKE_ERROR(_az_FACILITY_CORE_CBOR, 2),
+
+  /// No more CBOR text left to process.
+  AZ_ERROR_CBOR_READER_DONE = _az_RESULT_MAKE_ERROR(_az_FACILITY_CORE_CBOR, 3),
 
   // === HTTP error codes ===
   /// The #az_http_response instance is in an invalid state.
