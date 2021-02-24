@@ -5,13 +5,13 @@
 #include <azure/core/internal/az_result_internal.h>
 #include <azure/core/internal/az_span_internal.h>
 
-#include "az_json_private.h"
+#include "az_cbor_private.h"
 
 #include "az_span_private.h"
 #include <azure/core/_az_cfg.h>
 
-static az_span _az_json_token_copy_into_span_helper(
-    az_json_token const* json_token,
+static az_span _az_cbor_token_copy_into_span_helper(
+    az_cbor_token const* json_token,
     az_span destination)
 {
   _az_PRECONDITION(json_token->_internal.is_multisegment);
@@ -40,7 +40,7 @@ static az_span _az_json_token_copy_into_span_helper(
   return destination;
 }
 
-az_span az_json_token_copy_into_span(az_json_token const* json_token, az_span destination)
+az_span az_cbor_token_copy_into_span(az_cbor_token const* json_token, az_span destination)
 {
   _az_PRECONDITION_VALID_SPAN(destination, json_token->size, false);
 
@@ -53,10 +53,10 @@ az_span az_json_token_copy_into_span(az_json_token const* json_token, az_span de
   }
 
   // Token straddles more than one segment
-  return _az_json_token_copy_into_span_helper(json_token, destination);
+  return _az_cbor_token_copy_into_span_helper(json_token, destination);
 }
 
-AZ_NODISCARD static uint8_t _az_json_unescape_single_byte(uint8_t ch)
+AZ_NODISCARD static uint8_t _az_cbor_unescape_single_byte(uint8_t ch)
 {
   switch (ch)
   {
@@ -83,7 +83,7 @@ AZ_NODISCARD static uint8_t _az_json_unescape_single_byte(uint8_t ch)
   }
 }
 
-AZ_NODISCARD static bool _az_json_token_is_text_equal_helper(
+AZ_NODISCARD static bool _az_cbor_token_is_text_equal_helper(
     az_span token_slice,
     az_span* expected_text,
     bool* next_char_escaped)
@@ -108,7 +108,7 @@ AZ_NODISCARD static bool _az_json_token_is_text_equal_helper(
     {
       if (*next_char_escaped)
       {
-        token_byte = _az_json_unescape_single_byte(token_byte);
+        token_byte = _az_cbor_unescape_single_byte(token_byte);
       }
       else
       {
@@ -119,7 +119,7 @@ AZ_NODISCARD static bool _az_json_token_is_text_equal_helper(
           *expected_text = az_span_slice_to_end(*expected_text, i);
           return false;
         }
-        token_byte = _az_json_unescape_single_byte(token_ptr[token_idx]);
+        token_byte = _az_cbor_unescape_single_byte(token_ptr[token_idx]);
       }
       *next_char_escaped = false;
 
@@ -148,14 +148,14 @@ AZ_NODISCARD static bool _az_json_token_is_text_equal_helper(
   return token_idx == token_size;
 }
 
-AZ_NODISCARD bool az_json_token_is_text_equal(
-    az_json_token const* json_token,
+AZ_NODISCARD bool az_cbor_token_is_text_equal(
+    az_cbor_token const* json_token,
     az_span expected_text)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
 
   // Cannot compare the value of non-string token kinds
-  if (json_token->kind != AZ_JSON_TOKEN_STRING && json_token->kind != AZ_JSON_TOKEN_PROPERTY_NAME)
+  if (json_token->kind != AZ_CBOR_TOKEN_STRING && json_token->kind != AZ_CBOR_TOKEN_PROPERTY_NAME)
   {
     return false;
   }
@@ -214,7 +214,7 @@ AZ_NODISCARD bool az_json_token_is_text_equal(
   // Contiguous token
   if (!json_token->_internal.is_multisegment)
   {
-    return _az_json_token_is_text_equal_helper(token_slice, &expected_text, &next_char_escaped);
+    return _az_cbor_token_is_text_equal_helper(token_slice, &expected_text, &next_char_escaped);
   }
 
   // Token straddles more than one segment
@@ -232,7 +232,7 @@ AZ_NODISCARD bool az_json_token_is_text_equal(
       source = az_span_slice(source, 0, json_token->_internal.end_buffer_offset);
     }
 
-    if (!_az_json_token_is_text_equal_helper(source, &expected_text, &next_char_escaped)
+    if (!_az_cbor_token_is_text_equal_helper(source, &expected_text, &next_char_escaped)
         && az_span_size(expected_text) == 0)
     {
       return false;
@@ -243,14 +243,14 @@ AZ_NODISCARD bool az_json_token_is_text_equal(
   return az_span_size(expected_text) == 0;
 }
 
-AZ_NODISCARD az_result az_json_token_get_boolean(az_json_token const* json_token, bool* out_value)
+AZ_NODISCARD az_result az_cbor_token_get_boolean(az_cbor_token const* json_token, bool* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_TRUE && json_token->kind != AZ_JSON_TOKEN_FALSE)
+  if (json_token->kind != AZ_CBOR_TOKEN_TRUE && json_token->kind != AZ_CBOR_TOKEN_FALSE)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   // We assume the az_json_token is well-formed and self-consistent when returned from the
@@ -274,7 +274,7 @@ AZ_NODISCARD az_result az_json_token_get_boolean(az_json_token const* json_token
   return AZ_OK;
 }
 
-AZ_NODISCARD static az_result _az_json_token_get_string_helper(
+AZ_NODISCARD static az_result _az_cbor_token_get_string_helper(
     az_span source,
     char* destination,
     int32_t destination_max_size,
@@ -295,7 +295,7 @@ AZ_NODISCARD static az_result _az_json_token_get_string_helper(
     {
       if (*next_char_escaped)
       {
-        token_byte = _az_json_unescape_single_byte(token_byte);
+        token_byte = _az_cbor_unescape_single_byte(token_byte);
       }
       else
       {
@@ -305,7 +305,7 @@ AZ_NODISCARD static az_result _az_json_token_get_string_helper(
           *next_char_escaped = true;
           break;
         }
-        token_byte = _az_json_unescape_single_byte(source_ptr[i]);
+        token_byte = _az_cbor_unescape_single_byte(source_ptr[i]);
       }
       *next_char_escaped = false;
 
@@ -325,8 +325,8 @@ AZ_NODISCARD static az_result _az_json_token_get_string_helper(
   return AZ_OK;
 }
 
-AZ_NODISCARD az_result az_json_token_get_string(
-    az_json_token const* json_token,
+AZ_NODISCARD az_result az_cbor_token_get_string(
+    az_cbor_token const* json_token,
     char* destination,
     int32_t destination_max_size,
     int32_t* out_string_length)
@@ -335,9 +335,9 @@ AZ_NODISCARD az_result az_json_token_get_string(
   _az_PRECONDITION_NOT_NULL(destination);
   _az_PRECONDITION(destination_max_size > 0);
 
-  if (json_token->kind != AZ_JSON_TOKEN_STRING && json_token->kind != AZ_JSON_TOKEN_PROPERTY_NAME)
+  if (json_token->kind != AZ_CBOR_TOKEN_STRING && json_token->kind != AZ_CBOR_TOKEN_PROPERTY_NAME)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -361,7 +361,7 @@ AZ_NODISCARD az_result az_json_token_get_string(
     else
     {
       // Token straddles more than one segment
-      az_span remainder = _az_json_token_copy_into_span_helper(
+      az_span remainder = _az_cbor_token_copy_into_span_helper(
           json_token, az_span_create((uint8_t*)destination, destination_max_size));
 
       // Add a null terminator.
@@ -389,7 +389,7 @@ AZ_NODISCARD az_result az_json_token_get_string(
   // Contiguous token
   if (!json_token->_internal.is_multisegment)
   {
-    _az_RETURN_IF_FAILED(_az_json_token_get_string_helper(
+    _az_RETURN_IF_FAILED(_az_cbor_token_get_string_helper(
         token_slice, destination, destination_max_size, &dest_idx, &next_char_escaped));
   }
   else
@@ -409,7 +409,7 @@ AZ_NODISCARD az_result az_json_token_get_string(
         source = az_span_slice(source, 0, json_token->_internal.end_buffer_offset);
       }
 
-      _az_RETURN_IF_FAILED(_az_json_token_get_string_helper(
+      _az_RETURN_IF_FAILED(_az_cbor_token_get_string_helper(
           source, destination, destination_max_size, &dest_idx, &next_char_escaped));
     }
   }
@@ -429,14 +429,14 @@ AZ_NODISCARD az_result az_json_token_get_string(
 }
 
 AZ_NODISCARD az_result
-az_json_token_get_uint64(az_json_token const* json_token, uint64_t* out_value)
+az_cbor_token_get_uint64(az_cbor_token const* json_token, uint64_t* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_NUMBER)
+  if (json_token->kind != AZ_CBOR_TOKEN_NUMBER)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -458,20 +458,20 @@ az_json_token_get_uint64(az_json_token const* json_token, uint64_t* out_value)
   uint8_t scratch_buffer[_az_MAX_SIZE_FOR_UINT64] = { 0 };
   az_span scratch = AZ_SPAN_FROM_BUFFER(scratch_buffer);
 
-  az_span remainder = _az_json_token_copy_into_span_helper(json_token, scratch);
+  az_span remainder = _az_cbor_token_copy_into_span_helper(json_token, scratch);
 
   return az_span_atou64(az_span_slice(scratch, 0, _az_span_diff(remainder, scratch)), out_value);
 }
 
 AZ_NODISCARD az_result
-az_json_token_get_uint32(az_json_token const* json_token, uint32_t* out_value)
+az_cbor_token_get_uint32(az_cbor_token const* json_token, uint32_t* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_NUMBER)
+  if (json_token->kind != AZ_CBOR_TOKEN_NUMBER)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -493,19 +493,19 @@ az_json_token_get_uint32(az_json_token const* json_token, uint32_t* out_value)
   uint8_t scratch_buffer[_az_MAX_SIZE_FOR_UINT32] = { 0 };
   az_span scratch = AZ_SPAN_FROM_BUFFER(scratch_buffer);
 
-  az_span remainder = _az_json_token_copy_into_span_helper(json_token, scratch);
+  az_span remainder = _az_cbor_token_copy_into_span_helper(json_token, scratch);
 
   return az_span_atou32(az_span_slice(scratch, 0, _az_span_diff(remainder, scratch)), out_value);
 }
 
-AZ_NODISCARD az_result az_json_token_get_int64(az_json_token const* json_token, int64_t* out_value)
+AZ_NODISCARD az_result az_cbor_token_get_int64(az_cbor_token const* json_token, int64_t* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_NUMBER)
+  if (json_token->kind != AZ_CBOR_TOKEN_NUMBER)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -527,19 +527,19 @@ AZ_NODISCARD az_result az_json_token_get_int64(az_json_token const* json_token, 
   uint8_t scratch_buffer[_az_MAX_SIZE_FOR_INT64] = { 0 };
   az_span scratch = AZ_SPAN_FROM_BUFFER(scratch_buffer);
 
-  az_span remainder = _az_json_token_copy_into_span_helper(json_token, scratch);
+  az_span remainder = _az_cbor_token_copy_into_span_helper(json_token, scratch);
 
   return az_span_atoi64(az_span_slice(scratch, 0, _az_span_diff(remainder, scratch)), out_value);
 }
 
-AZ_NODISCARD az_result az_json_token_get_int32(az_json_token const* json_token, int32_t* out_value)
+AZ_NODISCARD az_result az_cbor_token_get_int32(az_cbor_token const* json_token, int32_t* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_NUMBER)
+  if (json_token->kind != AZ_CBOR_TOKEN_NUMBER)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -561,19 +561,19 @@ AZ_NODISCARD az_result az_json_token_get_int32(az_json_token const* json_token, 
   uint8_t scratch_buffer[_az_MAX_SIZE_FOR_INT32] = { 0 };
   az_span scratch = AZ_SPAN_FROM_BUFFER(scratch_buffer);
 
-  az_span remainder = _az_json_token_copy_into_span_helper(json_token, scratch);
+  az_span remainder = _az_cbor_token_copy_into_span_helper(json_token, scratch);
 
   return az_span_atoi32(az_span_slice(scratch, 0, _az_span_diff(remainder, scratch)), out_value);
 }
 
-AZ_NODISCARD az_result az_json_token_get_double(az_json_token const* json_token, double* out_value)
+AZ_NODISCARD az_result az_cbor_token_get_double(az_cbor_token const* json_token, double* out_value)
 {
   _az_PRECONDITION_NOT_NULL(json_token);
   _az_PRECONDITION_NOT_NULL(out_value);
 
-  if (json_token->kind != AZ_JSON_TOKEN_NUMBER)
+  if (json_token->kind != AZ_CBOR_TOKEN_NUMBER)
   {
-    return AZ_ERROR_JSON_INVALID_STATE;
+    return AZ_ERROR_CBOR_INVALID_STATE;
   }
 
   az_span token_slice = json_token->slice;
@@ -595,7 +595,7 @@ AZ_NODISCARD az_result az_json_token_get_double(az_json_token const* json_token,
   uint8_t scratch_buffer[_az_MAX_SIZE_FOR_PARSING_DOUBLE] = { 0 };
   az_span scratch = AZ_SPAN_FROM_BUFFER(scratch_buffer);
 
-  az_span remainder = _az_json_token_copy_into_span_helper(json_token, scratch);
+  az_span remainder = _az_cbor_token_copy_into_span_helper(json_token, scratch);
 
   return az_span_atod(az_span_slice(scratch, 0, _az_span_diff(remainder, scratch)), out_value);
 }

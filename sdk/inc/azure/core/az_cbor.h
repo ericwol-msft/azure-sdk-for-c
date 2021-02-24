@@ -642,6 +642,9 @@ typedef struct
     /// single primitive token (string, number, true, false, null).
     bool is_complex_cbor;
 
+    uint32_t element_type[256];
+    uint32_t element_len[256];
+
     /// A limited stack to track the depth and nested cbor objects or arrays read so far.
     _az_cbor_bit_stack bit_stack;
 

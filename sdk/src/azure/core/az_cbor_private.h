@@ -9,7 +9,7 @@
 
 #include <azure/core/_az_cfg_prefix.h>
 
-#define _az_cbor_TOKEN_DEFAULT                     \
+#define _az_CBOR_TOKEN_DEFAULT                     \
   (az_cbor_token)                                  \
   {                                                \
     .kind = AZ_cbor_TOKEN_NONE, ._internal = { 0 } \

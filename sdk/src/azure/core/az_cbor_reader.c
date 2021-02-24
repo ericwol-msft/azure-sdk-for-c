@@ -106,7 +106,7 @@ static void _az_cbor_reader_update_state(
   ref_cbor_reader->token.size = consumed;
 
   ref_cbor_reader->_internal.bytes_consumed += current_segment_consumed;
-  ref_cbor_reader->_internal.total_bytes_consumed += consumed;
+  ref_cbor_reader->_internal.total_bytes_consumed += current_segment_consumed;
 
   // We should have already set start_buffer_index and offset before moving to the next buffer.
   ref_cbor_reader->token._internal.end_buffer_index = ref_cbor_reader->_internal.buffer_index;
@@ -202,7 +202,7 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_container_end(
 
   az_span token = _get_remaining_cbor(ref_cbor_reader);
   _az_cbor_stack_pop(&ref_cbor_reader->_internal.bit_stack);
-  _az_cbor_reader_update_state(ref_cbor_reader, token_kind, az_span_slice(token, 0, 1), 1, 1);
+  _az_cbor_reader_update_state(ref_cbor_reader, token_kind, az_span_size(token) ? az_span_slice(token, 0, 1) : AZ_SPAN_EMPTY, 0, 1);
   return AZ_OK;
 }
 
@@ -225,29 +225,50 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_container_start(
   return AZ_OK;
 }
 
-AZ_NODISCARD static bool _az_is_valid_escaped_character(uint8_t byte)
+AZ_NODISCARD static az_result _az_cbor_get_length(
+    uint8_t type_id,
+    uint8_t* token_ptr,
+    uint32_t* element_length,
+    uint32_t* token_header_len)
 {
-  switch (byte)
+  if (type_id >= 0x00 && type_id <= 0x17)
   {
-    case '\\':
-    case '"':
-    case '/':
-    case 'b':
-    case 'f':
-    case 'n':
-    case 'r':
-    case 't':
-      return true;
-    default:
-      return false;
+    *element_length = type_id - 0x00;
+    *token_header_len = 0;
   }
+  else if (type_id >= 0x18)
+  {
+    *element_length = token_ptr[1]; // 1
+    *token_header_len = 1;
+  }
+  else if (type_id >= 0x19)
+  {
+    *element_length = (uint64_t)token_ptr[1] << 8; // 2
+    *element_length |= (uint64_t)token_ptr[2];
+    *token_header_len = 2;
+  }
+  else if (type_id >= 0x1A)
+  {
+    *element_length = (uint64_t)token_ptr[1] << 24; // 4
+    *element_length |= (uint64_t)token_ptr[2] << 16;
+    *element_length |= (uint64_t)token_ptr[3] << 8;
+    *element_length |= (uint64_t)token_ptr[4];
+    *token_header_len = 4;
+  }
+  else if (type_id >= 0x0B)
+  {
+    // 64bit not supported
+    return AZ_ERROR_UNEXPECTED_CHAR;
+  }
+  else
+  {
+    return AZ_ERROR_UNEXPECTED_CHAR;
+  }
+  return AZ_OK;
 }
 
 AZ_NODISCARD static az_result _az_cbor_reader_process_string(az_cbor_reader* ref_cbor_reader)
 {
-  // Move past the first '"' character
-  ref_cbor_reader->_internal.bytes_consumed++;
-
   az_span token = _get_remaining_cbor(ref_cbor_reader);
   int32_t remaining_size = az_span_size(token);
 
@@ -258,104 +279,33 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_string(az_cbor_reader* ref
   }
 
   int32_t current_index = 0;
-  int32_t string_length = 0;
+  uint32_t string_length = 0;
   uint8_t* token_ptr = az_span_ptr(token);
   uint8_t next_byte = token_ptr[0];
 
-  // Clear the state of any previous string token.
-  ref_cbor_reader->token._internal.string_has_escaped_chars = false;
+  uint32_t token_header_len;
+  _az_RETURN_IF_FAILED(_az_cbor_get_length(
+      next_byte - 0x60, token_ptr, &string_length, &token_header_len));
 
-  while (true)
-  {
-    if (next_byte == '"')
-    {
-      break;
-    }
+  token_ptr += token_header_len;
+  remaining_size -= token_header_len;
 
-    if (next_byte == '\\')
+  current_index = token_header_len + string_length;
+
+    if (current_index >= remaining_size)
     {
-      ref_cbor_reader->token._internal.string_has_escaped_chars = true;
-      current_index++;
-      string_length++;
-      if (current_index >= remaining_size)
-      {
         _az_RETURN_IF_FAILED(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false));
         current_index = 0;
         token_ptr = az_span_ptr(token);
         remaining_size = az_span_size(token);
-      }
-      next_byte = token_ptr[current_index];
-
-      if (next_byte == 'u')
-      {
-        current_index++;
-        string_length++;
-
-        // Expecting 4 hex digits to follow the escaped 'u'
-        for (int32_t i = 0; i < 4; i++)
-        {
-          if (current_index >= remaining_size)
-          {
-            _az_RETURN_IF_FAILED(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false));
-            current_index = 0;
-            token_ptr = az_span_ptr(token);
-            remaining_size = az_span_size(token);
-          }
-
-          string_length++;
-          next_byte = token_ptr[current_index++];
-
-          if (!isxdigit(next_byte))
-          {
-            return AZ_ERROR_UNEXPECTED_CHAR;
-          }
-        }
-
-        // We have already skipped past the u and 4 hex digits. The loop accounts for incrementing
-        // by 1 more, so subtract one to account for that.
-        current_index--;
-        string_length--;
-      }
-      else
-      {
-        if (!_az_is_valid_escaped_character(next_byte))
-        {
-          return AZ_ERROR_UNEXPECTED_CHAR;
-        }
-      }
     }
-    else
-    {
-      // Control characters are invalid within a cbor string and should be correctly escaped.
-      if (next_byte < _az_ASCII_SPACE_CHARACTER)
-      {
-        return AZ_ERROR_UNEXPECTED_CHAR;
-      }
-    }
-
-    current_index++;
-    string_length++;
-
-    if (current_index >= remaining_size)
-    {
-      _az_RETURN_IF_FAILED(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false));
-      current_index = 0;
-      token_ptr = az_span_ptr(token);
-      remaining_size = az_span_size(token);
-    }
-    next_byte = token_ptr[current_index];
-  }
 
   _az_cbor_reader_update_state(
       ref_cbor_reader,
       AZ_CBOR_TOKEN_STRING,
-      az_span_slice(token, 0, current_index),
-      current_index,
-      string_length);
-
-  // Add 1 to number of bytes consumed to account for the last '"' character.
-  ref_cbor_reader->_internal.bytes_consumed++;
-  ref_cbor_reader->_internal.total_bytes_consumed++;
+        az_span_slice(token, token_header_len + 1, current_index + 1),
+        current_index + 1,
+        string_length);
 
   return AZ_OK;
 }
@@ -364,25 +314,10 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_property_name(az_cbor_read
 {
   _az_RETURN_IF_FAILED(_az_cbor_reader_process_string(ref_cbor_reader));
 
-  az_span cbor = _az_cbor_reader_skip_whitespace(ref_cbor_reader);
-
-  // Expected a colon to indicate that a value will follow after the property name, but instead
-  // either reached end of data or some other character, which is invalid.
-  if (az_span_size(cbor) < 1)
-  {
-    return AZ_ERROR_UNEXPECTED_END;
-  }
-  if (az_span_ptr(cbor)[0] != ':')
-  {
-    return AZ_ERROR_UNEXPECTED_CHAR;
-  }
-
   // We don't need to set the cbor_reader->token.slice since that was already done
   // in _az_cbor_reader_process_string when processing the string portion of the property name.
   // Therefore, we don't call _az_cbor_reader_update_state here.
   ref_cbor_reader->token.kind = AZ_CBOR_TOKEN_PROPERTY_NAME;
-  ref_cbor_reader->_internal.bytes_consumed++; // For the name / value separator
-  ref_cbor_reader->_internal.total_bytes_consumed++; // For the name / value separator
 
   return AZ_OK;
 }
@@ -749,22 +684,77 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_value(
     az_cbor_reader* ref_cbor_reader,
     uint8_t const next_byte)
 {
-  if (next_byte == '"')
+  //if (next_byte == '"')
+  //{
+  //  return _az_cbor_reader_process_string(ref_cbor_reader);
+  //}
+  if (next_byte >= 0x60 && next_byte <= 0x7F)
   {
+    uint32_t token_header_len;
+    uint32_t token_element_len;
+    (void)_az_cbor_get_length(
+        next_byte - 0x80,
+        az_span_ptr(ref_cbor_reader->token.slice),
+        &token_element_len,
+        &token_header_len);
+
     return _az_cbor_reader_process_string(ref_cbor_reader);
   }
 
+  /*
   if (next_byte == '{')
   {
     return _az_cbor_reader_process_container_start(
         ref_cbor_reader, AZ_CBOR_TOKEN_BEGIN_OBJECT, _az_CBOR_STACK_OBJECT);
   }
+  */
+  if (next_byte >= 0xA0 && next_byte <= 0xBF)
+  {
+    uint32_t token_header_len;
+    uint32_t token_element_len;
+    (void) _az_cbor_get_length(
+        next_byte - 0xA0, az_span_ptr(ref_cbor_reader->token.slice), &token_element_len, &token_header_len);
 
+    az_result result =  _az_cbor_reader_process_container_start(ref_cbor_reader, AZ_CBOR_TOKEN_BEGIN_OBJECT, _az_CBOR_STACK_OBJECT);
+
+    ref_cbor_reader->_internal
+        .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = 0xA0;
+    ref_cbor_reader->_internal
+        .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = ((token_element_len) ) ;
+
+    return result;
+  }
+
+  /*
   if (next_byte == '[')
   {
     return _az_cbor_reader_process_container_start(
         ref_cbor_reader, AZ_CBOR_TOKEN_BEGIN_ARRAY, _az_CBOR_STACK_ARRAY);
   }
+  */
+  if (next_byte >= 0x80 && next_byte <= 0x9F)
+  {
+    uint32_t token_header_len;
+    uint32_t token_element_len;
+    (void)_az_cbor_get_length(
+        next_byte - 0x80,
+        az_span_ptr(ref_cbor_reader->token.slice),
+        &token_element_len,
+        &token_header_len);
+
+    az_result result =  _az_cbor_reader_process_container_start(ref_cbor_reader, AZ_CBOR_TOKEN_BEGIN_ARRAY, _az_CBOR_STACK_ARRAY);
+
+    ref_cbor_reader->_internal
+        .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = 0x80;
+    ref_cbor_reader->_internal
+        .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = token_element_len;
+    return result;
+  }
+
 
   if (isdigit(next_byte) || next_byte == '-')
   {
@@ -797,6 +787,40 @@ AZ_NODISCARD static az_result _az_cbor_reader_read_first_token(
     az_span cbor,
     uint8_t const first_byte)
 {
+  if (first_byte >= 0xA0 && first_byte < 0xBB)  // map
+  {
+    _az_cbor_stack_push(&ref_cbor_reader->_internal.bit_stack, _az_CBOR_STACK_OBJECT);
+
+    int32_t len_bytes = 0;
+
+
+    uint32_t token_header_len;
+    uint32_t token_element_len;
+    _az_RETURN_IF_FAILED(_az_cbor_get_length(
+        first_byte - 0xA0, az_span_ptr(cbor), &token_element_len, &token_header_len));
+
+    len_bytes = token_header_len;
+    ref_cbor_reader->_internal
+        .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = 0xA0;
+    ref_cbor_reader->_internal
+        .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = token_element_len;
+
+    _az_cbor_reader_update_state(
+        ref_cbor_reader,
+        AZ_CBOR_TOKEN_BEGIN_OBJECT,
+        az_span_slice(cbor, 0, 1 + len_bytes),
+        len_bytes + 1,
+        len_bytes + 1);
+
+//    ref_cbor_reader->_internal.bytes_consumed += (1 + len_bytes);
+    ref_cbor_reader->_internal.is_complex_cbor = true;
+
+    return AZ_OK;
+  }
+
+  /*
   if (first_byte == '{')
   {
     _az_cbor_stack_push(&ref_cbor_reader->_internal.bit_stack, _az_CBOR_STACK_OBJECT);
@@ -807,7 +831,40 @@ AZ_NODISCARD static az_result _az_cbor_reader_read_first_token(
     ref_cbor_reader->_internal.is_complex_cbor = true;
     return AZ_OK;
   }
+  */
 
+
+  if (first_byte >= 0x80 && first_byte < 0x9F) // array
+  {
+    _az_cbor_stack_push(&ref_cbor_reader->_internal.bit_stack, _az_CBOR_STACK_ARRAY);
+
+    uint32_t token_header_len;
+    uint32_t token_element_len;
+    _az_RETURN_IF_FAILED(_az_cbor_get_length(
+        first_byte - 0x80, az_span_ptr(cbor), &token_element_len, &token_header_len));
+
+    int32_t len_bytes = token_header_len;
+    ref_cbor_reader->_internal
+        .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = 0x80;
+    ref_cbor_reader->_internal
+        .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+        = token_element_len;
+
+    _az_cbor_reader_update_state(
+        ref_cbor_reader,
+        AZ_CBOR_TOKEN_BEGIN_ARRAY,
+        az_span_slice(cbor, 0, 1 + len_bytes),
+        len_bytes,
+        len_bytes);
+
+    ref_cbor_reader->_internal.is_complex_cbor = true;
+    ref_cbor_reader->_internal.bytes_consumed += (1 + len_bytes);
+
+    return AZ_OK;
+  }
+
+  /*
   if (first_byte == '[')
   {
     _az_cbor_stack_push(&ref_cbor_reader->_internal.bit_stack, _az_CBOR_STACK_ARRAY);
@@ -818,6 +875,7 @@ AZ_NODISCARD static az_result _az_cbor_reader_read_first_token(
     ref_cbor_reader->_internal.is_complex_cbor = true;
     return AZ_OK;
   }
+  */
 
   return _az_cbor_reader_process_value(ref_cbor_reader, first_byte);
 }
@@ -830,12 +888,12 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_next_byte(
   // invalid. Expected end of data.
   if (ref_cbor_reader->_internal.bit_stack._internal.current_depth == 0)
   {
-    return AZ_ERROR_UNEXPECTED_CHAR;
+    return AZ_ERROR_JSON_READER_DONE;
   }
 
-  bool within_object
-      = _az_cbor_stack_peek(&ref_cbor_reader->_internal.bit_stack) == _az_CBOR_STACK_OBJECT;
-
+  //bool within_object
+  //    = _az_cbor_stack_peek(&ref_cbor_reader->_internal.bit_stack) == _az_CBOR_STACK_OBJECT;
+  /*
   if (next_byte == ',')
   {
     ref_cbor_reader->_internal.bytes_consumed++;
@@ -862,13 +920,35 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_next_byte(
 
     return _az_cbor_reader_process_value(ref_cbor_reader, next_byte);
   }
+  */
+  if (ref_cbor_reader->_internal
+          .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth])
+  {
+    ref_cbor_reader->_internal
+        .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]--;
 
-  if (next_byte == '}')
+      if (ref_cbor_reader->_internal
+            .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+            == 0xA0)
+    {
+        return _az_cbor_reader_process_property_name(ref_cbor_reader);
+    }
+
+    return _az_cbor_reader_process_value(ref_cbor_reader, next_byte);
+  }
+
+  //ref_cbor_reader->_internal
+  //    .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth-1]--;
+
+  if (ref_cbor_reader->_internal
+          .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth] == 0xA0)
   {
     return _az_cbor_reader_process_container_end(ref_cbor_reader, AZ_CBOR_TOKEN_END_OBJECT);
   }
 
-  if (next_byte == ']')
+  if (ref_cbor_reader->_internal
+          .element_type[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+      == 0x80)
   {
     return _az_cbor_reader_process_container_end(ref_cbor_reader, AZ_CBOR_TOKEN_END_ARRAY);
   }
@@ -881,8 +961,7 @@ AZ_NODISCARD az_result az_cbor_reader_next_token(az_cbor_reader* ref_cbor_reader
 {
   _az_PRECONDITION_NOT_NULL(ref_cbor_reader);
 
-  az_span cbor = _az_cbor_reader_skip_whitespace(ref_cbor_reader);
-
+  az_span cbor = ref_cbor_reader->_internal.cbor_buffer;
   if (az_span_size(cbor) < 1)
   {
     if (ref_cbor_reader->token.kind == AZ_CBOR_TOKEN_NONE
@@ -902,7 +981,7 @@ AZ_NODISCARD az_result az_cbor_reader_next_token(az_cbor_reader* ref_cbor_reader
   ref_cbor_reader->token._internal.end_buffer_index = -1;
   ref_cbor_reader->token._internal.end_buffer_offset = -1;
 
-  uint8_t const first_byte = az_span_ptr(cbor)[0];
+  uint8_t const first_byte = az_span_ptr(cbor)[ref_cbor_reader->_internal.bytes_consumed];
 
   switch (ref_cbor_reader->token.kind)
   {
@@ -912,25 +991,25 @@ AZ_NODISCARD az_result az_cbor_reader_next_token(az_cbor_reader* ref_cbor_reader
     }
     case AZ_CBOR_TOKEN_BEGIN_OBJECT:
     {
-      if (first_byte == '}')
+      if (ref_cbor_reader->_internal.element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+          == 0 /*first_byte == '}'*/)
       {
         return _az_cbor_reader_process_container_end(ref_cbor_reader, AZ_CBOR_TOKEN_END_OBJECT);
       }
+      ref_cbor_reader->_internal
+          .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]--;
 
-      // We expect the start of a property name as the first non-whitespace character within a
-      // cbor object.
-      if (first_byte != '"')
-      {
-        return AZ_ERROR_UNEXPECTED_CHAR;
-      }
       return _az_cbor_reader_process_property_name(ref_cbor_reader);
     }
     case AZ_CBOR_TOKEN_BEGIN_ARRAY:
     {
-      if (first_byte == ']')
+      if (ref_cbor_reader->_internal.element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]
+          == 0 /*first_byte == '}'*/)
       {
         return _az_cbor_reader_process_container_end(ref_cbor_reader, AZ_CBOR_TOKEN_END_ARRAY);
       }
+      ref_cbor_reader->_internal
+          .element_len[ref_cbor_reader->_internal.bit_stack._internal.current_depth]--;
 
       return _az_cbor_reader_process_value(ref_cbor_reader, first_byte);
     }
