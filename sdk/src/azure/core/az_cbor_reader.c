@@ -435,208 +435,6 @@ AZ_NODISCARD static az_result _az_validate_next_byte_is_digit(
   return AZ_OK;
 }
 
-AZ_NODISCARD static az_result _az_cbor_reader_process_number(az_cbor_reader* ref_cbor_reader)
-{
-  az_span token = _get_remaining_cbor(ref_cbor_reader);
-
-  int32_t total_consumed = 0;
-  int32_t current_consumed = 0;
-
-  uint8_t next_byte = az_span_ptr(token)[0];
-  if (next_byte == '-')
-  {
-    total_consumed++;
-    current_consumed++;
-
-    // A negative sign must be followed by at least one digit.
-    _az_RETURN_IF_FAILED(
-        _az_validate_next_byte_is_digit(ref_cbor_reader, &token, &current_consumed));
-
-    next_byte = az_span_ptr(token)[current_consumed];
-  }
-
-  if (next_byte == '0')
-  {
-    total_consumed++;
-    current_consumed++;
-
-    if (current_consumed >= az_span_size(token))
-    {
-      if (az_result_failed(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false)))
-      {
-        // If there is no more cbor, this is a valid end state only when the cbor payload contains a
-        // single value: "[-]0"
-        // Otherwise, the payload is incomplete and ending too early.
-        return _az_cbor_reader_update_number_state_if_single_value(
-            ref_cbor_reader,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      current_consumed = 0;
-    }
-
-    next_byte = az_span_ptr(token)[current_consumed];
-    az_result result = AZ_OK;
-    if (_az_finished_consuming_cbor_number(next_byte, AZ_SPAN_FROM_STR(".eE"), &result))
-    {
-      if (az_result_succeeded(result))
-      {
-        _az_cbor_reader_update_state(
-            ref_cbor_reader,
-            AZ_CBOR_TOKEN_NUMBER,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      return result;
-    }
-  }
-  else
-  {
-    _az_PRECONDITION(isdigit(next_byte));
-
-    // Integer part before decimal
-    _az_cbor_reader_consume_digits(ref_cbor_reader, &token, &current_consumed, &total_consumed);
-
-    if (current_consumed >= az_span_size(token))
-    {
-      if (az_result_failed(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false)))
-      {
-        // If there is no more cbor, this is a valid end state only when the cbor payload contains a
-        // single value: "[-][digits]"
-        // Otherwise, the payload is incomplete and ending too early.
-        return _az_cbor_reader_update_number_state_if_single_value(
-            ref_cbor_reader,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      current_consumed = 0;
-    }
-
-    next_byte = az_span_ptr(token)[current_consumed];
-    az_result result = AZ_OK;
-    if (_az_finished_consuming_cbor_number(next_byte, AZ_SPAN_FROM_STR(".eE"), &result))
-    {
-      if (az_result_succeeded(result))
-      {
-        _az_cbor_reader_update_state(
-            ref_cbor_reader,
-            AZ_CBOR_TOKEN_NUMBER,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      return result;
-    }
-  }
-
-  if (next_byte == '.')
-  {
-    total_consumed++;
-    current_consumed++;
-
-    // A decimal point must be followed by at least one digit.
-    _az_RETURN_IF_FAILED(
-        _az_validate_next_byte_is_digit(ref_cbor_reader, &token, &current_consumed));
-
-    // Integer part after decimal
-    _az_cbor_reader_consume_digits(ref_cbor_reader, &token, &current_consumed, &total_consumed);
-
-    if (current_consumed >= az_span_size(token))
-    {
-      if (az_result_failed(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false)))
-      {
-        // If there is no more cbor, this is a valid end state only when the cbor payload contains a
-        // single value: "[-][digits].[digits]"
-        // Otherwise, the payload is incomplete and ending too early.
-        return _az_cbor_reader_update_number_state_if_single_value(
-            ref_cbor_reader,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      current_consumed = 0;
-    }
-
-    next_byte = az_span_ptr(token)[current_consumed];
-    az_result result = AZ_OK;
-    if (_az_finished_consuming_cbor_number(next_byte, AZ_SPAN_FROM_STR("eE"), &result))
-    {
-      if (az_result_succeeded(result))
-      {
-        _az_cbor_reader_update_state(
-            ref_cbor_reader,
-            AZ_CBOR_TOKEN_NUMBER,
-            az_span_slice(token, 0, current_consumed),
-            current_consumed,
-            total_consumed);
-      }
-      return result;
-    }
-  }
-
-  // Move past 'e'/'E'
-  total_consumed++;
-  current_consumed++;
-
-  // The 'e'/'E' character must be followed by a sign or at least one digit.
-  if (current_consumed >= az_span_size(token))
-  {
-    _az_RETURN_IF_FAILED(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false));
-    current_consumed = 0;
-  }
-
-  next_byte = az_span_ptr(token)[current_consumed];
-  if (next_byte == '-' || next_byte == '+')
-  {
-    total_consumed++;
-    current_consumed++;
-
-    // A sign must be followed by at least one digit.
-    _az_RETURN_IF_FAILED(
-        _az_validate_next_byte_is_digit(ref_cbor_reader, &token, &current_consumed));
-  }
-
-  // Integer part after the 'e'/'E'
-  _az_cbor_reader_consume_digits(ref_cbor_reader, &token, &current_consumed, &total_consumed);
-
-  if (current_consumed >= az_span_size(token))
-  {
-    if (az_result_failed(_az_cbor_reader_get_next_buffer(ref_cbor_reader, &token, false)))
-    {
-
-      // If there is no more cbor, this is a valid end state only when the cbor payload contains a
-      // single value: "[-][digits].[digits]e[+|-][digits]"
-      // Otherwise, the payload is incomplete and ending too early.
-      return _az_cbor_reader_update_number_state_if_single_value(
-          ref_cbor_reader,
-          az_span_slice(token, 0, current_consumed),
-          current_consumed,
-          total_consumed);
-    }
-    current_consumed = 0;
-  }
-
-  // Checking if we are done processing a cbor number
-  next_byte = az_span_ptr(token)[current_consumed];
-  int32_t index = az_span_find(cbor_delimiters, az_span_create(&next_byte, 1));
-  if (index == -1)
-  {
-    return AZ_ERROR_UNEXPECTED_CHAR;
-  }
-
-  _az_cbor_reader_update_state(
-      ref_cbor_reader,
-      AZ_CBOR_TOKEN_NUMBER,
-      az_span_slice(token, 0, current_consumed),
-      current_consumed,
-      total_consumed);
-
-  return AZ_OK;
-}
-
 AZ_INLINE int32_t _az_min(int32_t a, int32_t b) { return a < b ? a : b; }
 
 AZ_NODISCARD static az_result _az_cbor_reader_process_literal(
@@ -701,6 +499,8 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_value(
     return _az_cbor_reader_process_string(ref_cbor_reader);
   }
 
+
+
   /*
   if (next_byte == '{')
   {
@@ -755,29 +555,50 @@ AZ_NODISCARD static az_result _az_cbor_reader_process_value(
     return result;
   }
 
-
+  /*
   if (isdigit(next_byte) || next_byte == '-')
   {
     return _az_cbor_reader_process_number(ref_cbor_reader);
   }
+  */
+  if (next_byte == 0x18) // one byte
+  {
+    az_span token = _get_remaining_cbor(ref_cbor_reader);
+    _az_cbor_reader_update_state(
+        ref_cbor_reader,
+        AZ_CBOR_TOKEN_NUMBER, az_span_slice(token, 1, 2),
+        2,
+        2);
+    return AZ_OK;
+  }
+  else if (next_byte == 0x19) // two byte
+  {
+    az_span token = _get_remaining_cbor(ref_cbor_reader);
+    _az_cbor_reader_update_state(
+        ref_cbor_reader, AZ_CBOR_TOKEN_NUMBER, az_span_slice(token, 1, 3), 3, 3);
+    return AZ_OK;
+  }
 
-  if (next_byte == 'f')
+  if (next_byte == 0xF6)
+  {
+    _az_cbor_reader_update_state(
+        ref_cbor_reader, AZ_CBOR_TOKEN_NULL, AZ_SPAN_FROM_STR("null"), 1, 1);
+    return AZ_OK;
+  }
+
+  if (next_byte == 'f') //CBOR 0xF4
   {
     return _az_cbor_reader_process_literal(
         ref_cbor_reader, AZ_SPAN_FROM_STR("false"), AZ_CBOR_TOKEN_FALSE);
   }
 
-  if (next_byte == 't')
+  if (next_byte == 't')  //CBOR 0xF5
   {
     return _az_cbor_reader_process_literal(
         ref_cbor_reader, AZ_SPAN_FROM_STR("true"), AZ_CBOR_TOKEN_TRUE);
   }
 
-  if (next_byte == 'n')
-  {
-    return _az_cbor_reader_process_literal(
-        ref_cbor_reader, AZ_SPAN_FROM_STR("null"), AZ_CBOR_TOKEN_NULL);
-  }
+
 
   return AZ_ERROR_UNEXPECTED_CHAR;
 }

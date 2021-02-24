@@ -246,6 +246,20 @@ void dump_token(az_cbor_reader* jr)
         az_span_size(jr->token.slice),
         az_span_ptr(jr->token.slice));
   }
+  else if (jr->token.kind == AZ_CBOR_TOKEN_NUMBER)
+  {
+    int number = 0;
+    if (az_span_size(jr->token.slice) == 1)
+    {
+      number = *((unsigned char*)az_span_ptr(jr->token.slice));
+    }
+    else if (az_span_size(jr->token.slice) == 2)
+    {
+      number = *((unsigned char*)az_span_ptr(jr->token.slice)) << 8;
+      number |= *((unsigned char*)az_span_ptr(jr->token.slice) + 1);
+    }
+    printf("%s %d\n", token_name[jr->token.kind], number);
+  }
   else
   {
     printf("%s\n", token_name[jr->token.kind]);
@@ -256,13 +270,14 @@ int main(void)
 {
   az_result result;
 
-  //char bar[1024];
-  //FILE *fp = fopen("C:\\Users\\ericwol\\Desktop\\json-cbor-test-data\\1.json.cbor", "rb");
-  //size_t ddd = fread(bar, 1, 1024, fp);
-  //if (ddd == 0)
-    //return;
+  uint8_t bar[10383];
+  FILE *fp = fopen("C:\\Users\\ericwol\\Desktop\\json-cbor-test-data\\3.json.cbor", "rb");
+  int32_t size = (int32_t)fread(bar, 1, sizeof(bar), fp);
+  if (size == 0)
+    return;
 
-  char foo[] = {
+  /*
+  uint8_t foo[] = {
     0xa1, 0x68, 0x67, 0x6c, 0x6f, 0x73, 0x73, 0x61, 0x72, 0x79, 0xa2, 0x68, 0x47,
     0x6c, 0x6f, 0x73, 0x73, 0x44, 0x69, 0x76, 0xa2, 0x69, 0x47, 0x6c, 0x6f, 0x73,
     0x73, 0x4c, 0x69, 0x73, 0x74, 0xa1, 0x6a, 0x47, 0x6c, 0x6f, 0x73, 0x73, 0x45,
@@ -288,13 +303,18 @@ int main(void)
     0x70, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x20, 0x67, 0x6c, 0x6f, 0x73,
     0x73, 0x61, 0x72, 0x79
   };
+  */
+  uint8_t* input = bar;
+  size = sizeof(bar);
 
-  az_span cbor_payload = AZ_SPAN_FROM_BUFFER(foo);
+  //az_span cbor_payload = AZ_SPAN_FROM_BUFFER(foo);
+  az_span cbor_payload = az_span_create(input, size);
   az_cbor_reader jr;
   result = az_cbor_reader_init(&jr, cbor_payload, NULL);
   dump_token(&jr);
 
   //AZ_ERROR_JSON_READER_DONE
+
 
     while (1)
     {
